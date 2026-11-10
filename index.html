@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Digit Reader · Deekshith P</title>
+<meta name="description" content="Draw a digit and a neural network trained on MNIST reads it, live in your browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Figtree:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/theme.js"></script>
+<style>
+.stage { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 24px; align-items: start; }
+.pad { padding: 16px; }
+#draw { display: block; width: 100%; aspect-ratio: 1; border-radius: 12px; background: #0F1A1B; cursor: crosshair; touch-action: none; }
+.padbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.padbar span { font: 400 12px var(--mono); color: var(--muted); }
+.result { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 24px; align-items: center; }
+#guess { font: 700 120px/0.9 var(--display); letter-spacing: -0.05em; color: var(--sea); min-width: 0.7em; text-align: center; }
+#conf { font: 500 22px var(--mono); }
+#confnote { color: var(--muted); font-size: 14px; margin: 4px 0 0; }
+.bars { display: grid; gap: 6px; margin-top: 20px; }
+.bar { display: grid; grid-template-columns: 16px minmax(0, 1fr) 52px; gap: 10px; align-items: center; font: 400 13px var(--mono); font-variant-numeric: tabular-nums; }
+.bar .track { height: 10px; border-radius: 5px; background: var(--bg); overflow: hidden; }
+.bar .fill { height: 100%; width: 0; background: var(--green); border-radius: 5px; transition: width .15s ease; }
+.bar.top .fill { background: var(--pop); }
+.bar.top { font-weight: 500; }
+.bar span:last-child { text-align: right; color: var(--muted); }
+.side { display: grid; gap: 24px; }
+.sees { display: flex; gap: 16px; align-items: center; }
+#seen { width: 84px; height: 84px; image-rendering: pixelated; border-radius: 8px; background: #000; flex: none; }
+.sees p { margin: 0; font-size: 14px; color: var(--muted); }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 24px; }
+.stats div b { display: block; font: 500 24px var(--mono); color: var(--sea); }
+.stats div span { font-size: 13px; color: var(--muted); }
+.samples { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.samples button { width: 36px; height: 36px; border-radius: 8px; border: 1.5px solid var(--line); background: var(--bg); cursor: pointer; font: 500 15px var(--mono); color: var(--fg); }
+.samples button:hover { border-color: var(--sea); color: var(--sea); }
+@media (max-width: 760px) {
+  .stage { grid-template-columns: minmax(0, 1fr); }
+  #guess { font-size: 88px; }
+  .stats { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <a class="mark" href="https://deeku46.github.io/">deekshith<i>.</i></a>
+  <span style="display:flex;gap:16px;align-items:center"><a class="back" href="https://github.com/deeku46/digit-reader" target="_blank" rel="noopener">source code &nearr;</a><button id="theme" type="button">night</button></span>
+</div></header>
+
+<main class="wrap">
+  <span class="eyebrow"><b></b>live project · computer vision</span>
+  <h1>Draw a digit. <em>A neural network reads it.</em></h1>
+  <p class="lede">A small neural network trained on 8,500 real handwritten digits. It runs entirely in your browser: nothing you draw is sent anywhere.</p>
+
+  <div class="stage">
+    <div class="card pad">
+      <canvas id="draw" width="280" height="280" aria-label="Drawing pad: draw a single digit from 0 to 9"></canvas>
+      <div class="padbar">
+        <span>draw one digit, 0 to 9</span>
+        <button class="btn" id="clear" type="button">clear</button>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <div class="result">
+          <div id="guess" aria-live="polite">?</div>
+          <div>
+            <div class="label">prediction</div>
+            <div id="conf">waiting for a drawing</div>
+            <p id="confnote">Start drawing on the pad. The guess updates as you draw.</p>
+          </div>
+        </div>
+        <div class="bars" id="bars"></div>
+      </div>
+      <div class="card sees">
+        <canvas id="seen" width="28" height="28" aria-label="Your drawing as the model sees it, 28 by 28 pixels"></canvas>
+        <p><strong style="color:var(--fg)">What the model sees.</strong> Your drawing is cropped, shrunk to 28&times;28 pixels and centred, the same way the training digits were prepared.</p>
+      </div>
+      <div class="card">
+        <div class="label">no idea what to draw? load a test digit the model never trained on</div>
+        <div class="samples" id="samples"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <section class="how">
+    <div><h3>The data</h3><p>10,000 digits from the MNIST dataset, split into 8,500 for training and 1,500 held back for testing. Training images were randomly rotated, rescaled and thickened so the model copes with mouse and finger drawing.</p></div>
+    <div><h3>The model</h3><p>A multilayer perceptron: 784 inputs, hidden layers of 128 and 64 ReLU units, 10 softmax outputs. Trained in scikit-learn with Adam and early stopping, then compressed to 8-bit weights so the whole model is about 110&nbsp;KB.</p></div>
+    <div><h3>In the browser</h3><p>The forward pass is about forty lines of plain JavaScript: three matrix multiplications and a softmax. No ML library, no server, and it runs on every stroke.</p></div>
+  </section>
+</main>
+
+<footer><div class="wrap">Deekshith P · <a href="https://deeku46.github.io/">deeku46.github.io</a></div></footer>
+
+<script src="model.js"></script>
+<script src="samples.js"></script>
+<script>
+(function () {
+  var M = window.DIGIT_MODEL, meta = M.meta;
+
+  /* ---- decode int8 weights ---- */
+  var layers = M.layers.map(function (L) {
+    var bin = atob(L.w), n = bin.length, w = new Float32Array(n);
+    for (var i = 0; i < n; i++) { var v = bin.charCodeAt(i); w[i] = (v > 127 ? v - 256 : v) * L.scale; }
+    return { inN: L.shape[0], outN: L.shape[1], w: w, b: L.b };
+  });
+  function predict(x) {
+    for (var l = 0; l < layers.length; l++) {
+      var L = layers[l], out = new Float32Array(L.outN);
+      for (var j = 0; j < L.outN; j++) out[j] = L.b[j];
+      for (var i = 0; i < L.inN; i++) {
+        var xi = x[i]; if (!xi) continue;
+        var row = i * L.outN;
+        for (var j2 = 0; j2 < L.outN; j2++) out[j2] += xi * L.w[row + j2];
+      }
+      if (l < layers.length - 1) for (var k = 0; k < L.outN; k++) if (out[k] < 0) out[k] = 0;
+      x = out;
+    }
+    var mx = Math.max.apply(null, x), s = 0, p = [];
+    for (var c = 0; c < x.length; c++) { p[c] = Math.exp(x[c] - mx); s += p[c]; }
+    return p.map(function (v) { return v / s; });
+  }
+
+  /* ---- drawing pad ---- */
+  var pad = document.getElementById('draw'), px = pad.getContext('2d'), drawing = false, lastPt = null, dirty = false;
+  function resetPad() { px.fillStyle = '#000'; px.fillRect(0, 0, 280, 280); }
+  resetPad();
+  function pos(e) { var r = pad.getBoundingClientRect(); return [(e.clientX - r.left) * 280 / r.width, (e.clientY - r.top) * 280 / r.height]; }
+  function stroke(a, b) {
+    px.strokeStyle = '#fff'; px.lineWidth = 20; px.lineCap = 'round'; px.lineJoin = 'round';
+    px.beginPath(); px.moveTo(a[0], a[1]); px.lineTo(b[0], b[1]); px.stroke();
+  }
+  pad.addEventListener('pointerdown', function (e) { drawing = true; pad.setPointerCapture(e.pointerId); lastPt = pos(e); stroke(lastPt, lastPt); dirty = true; });
+  pad.addEventListener('pointermove', function (e) { if (!drawing) return; var p = pos(e); stroke(lastPt, p); lastPt = p; dirty = true; });
+  ['pointerup', 'pointercancel'].forEach(function (t) { pad.addEventListener(t, function () { drawing = false; }); });
+
+  /* ---- preprocessing: crop, fit to 20x20, centre by mass in 28x28 (mirrors training) ---- */
+  var tmp = document.createElement('canvas'), tx = tmp.getContext('2d');
+  var seen = document.getElementById('seen'), sx = seen.getContext('2d');
+  function toInput() {
+    var img = px.getImageData(0, 0, 280, 280).data, x0 = 280, y0 = 280, x1 = -1, y1 = -1;
+    for (var y = 0; y < 280; y++) for (var x = 0; x < 280; x++) if (img[(y * 280 + x) * 4] > 25) {
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+    if (x1 < 0) return null;
+    var w = x1 - x0 + 1, h = y1 - y0 + 1, s = 20 / Math.max(w, h), nw = Math.max(1, Math.round(w * s)), nh = Math.max(1, Math.round(h * s));
+    tmp.width = 28; tmp.height = 28; tx.fillStyle = '#000'; tx.fillRect(0, 0, 28, 28);
+    tx.imageSmoothingEnabled = true; tx.imageSmoothingQuality = 'high';
+    tx.drawImage(pad, x0, y0, w, h, Math.floor((28 - nw) / 2), Math.floor((28 - nh) / 2), nw, nh);
+    var d = tx.getImageData(0, 0, 28, 28).data, a = new Float32Array(784), m = 0, cx = 0, cy = 0;
+    for (var i = 0; i < 784; i++) { var v = d[i * 4] / 255; a[i] = v; m += v; cx += v * (i % 28); cy += v * Math.floor(i / 28); }
+    var dx = Math.round(14 - cx / m), dy = Math.round(14 - cy / m), out = new Float32Array(784);
+    for (var yy = 0; yy < 28; yy++) for (var xx = 0; xx < 28; xx++) {
+      var sy = yy - dy, sxx = xx - dx;
+      if (sy >= 0 && sy < 28 && sxx >= 0 && sxx < 28) out[yy * 28 + xx] = a[sy * 28 + sxx];
+    }
+    return out;
+  }
+  function showSeen(x) {
+    var id = sx.createImageData(28, 28);
+    for (var i = 0; i < 784; i++) { var v = x ? Math.round(x[i] * 255) : 0; id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; }
+    sx.putImageData(id, 0, 0);
+  }
+
+  /* ---- output ---- */
+  var barsEl = document.getElementById('bars'), bars = [];
+  for (var d = 0; d < 10; d++) {
+    var row = document.createElement('div'); row.className = 'bar';
+    row.innerHTML = '<span>' + d + '</span><div class="track"><div class="fill"></div></div><span>0.0%</span>';
+    barsEl.appendChild(row); bars.push(row);
+  }
+  var guess = document.getElementById('guess'), conf = document.getElementById('conf'), note = document.getElementById('confnote');
+  function show(p) {
+    if (!p) {
+      guess.textContent = '?'; conf.textContent = 'waiting for a drawing';
+      note.textContent = 'Start drawing on the pad. The guess updates as you draw.';
+      bars.forEach(function (r) { r.className = 'bar'; r.querySelector('.fill').style.width = '0'; r.lastChild.textContent = '0.0%'; });
+      return;
+    }
+    var best = 0; for (var i = 1; i < 10; i++) if (p[i] > p[best]) best = i;
+    var second = best ? 0 : 1; for (var j = 0; j < 10; j++) if (j !== best && p[j] > p[second]) second = j;
+    guess.textContent = best;
+    conf.textContent = (p[best] * 100).toFixed(1) + '% sure';
+    note.textContent = p[best] > 0.9 ? 'Confident.' : p[best] > 0.6 ? 'Fairly sure, but it also sees a ' + second + '.' : 'Unsure: it is torn between ' + best + ' and ' + second + '.';
+    bars.forEach(function (r, k) {
+      r.className = 'bar' + (k === best ? ' top' : '');
+      r.querySelector('.fill').style.width = (p[k] * 100).toFixed(1) + '%';
+      r.lastChild.textContent = (p[k] * 100).toFixed(1) + '%';
+    });
+  }
+  function tick() {
+    if (dirty) { dirty = false; var x = toInput(); showSeen(x); show(x ? predict(x) : null); }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+  document.getElementById('clear').addEventListener('click', function () { resetPad(); dirty = true; });
+
+  /* ---- held-out test samples ---- */
+  var sampEl = document.getElementById('samples');
+  window.DIGIT_SAMPLES.forEach(function (s) {
+    var b = document.createElement('button'); b.type = 'button'; b.textContent = s.label;
+    b.setAttribute('aria-label', 'Load a test image of a ' + s.label);
+    b.addEventListener('click', function () {
+      var c = document.createElement('canvas'); c.width = 28; c.height = 28;
+      var cx = c.getContext('2d'), id = cx.createImageData(28, 28), raw = atob(s.px);
+      for (var i = 0; i < 784; i++) { var v = raw.charCodeAt(i); id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; }
+      cx.putImageData(id, 0, 0);
+      resetPad(); px.imageSmoothingEnabled = true; px.drawImage(c, 0, 0, 280, 280); dirty = true;
+    });
+    sampEl.appendChild(b);
+  });
+
+  /* ---- model card ---- */
+  var worst = meta.per_class.map(function (v, i) { return [v, i]; }).sort(function (a, b) { return a[0] - b[0]; })[0];
+  document.getElementById('stats').innerHTML =
+    '<div><b>' + (meta.acc_int8 * 100).toFixed(1) + '%</b><span>accuracy on ' + meta.test.toLocaleString() + ' unseen test digits</span></div>' +
+    '<div><b>' + (layers.reduce(function (s, L) { return s + L.inN * L.outN + L.outN; }, 0) / 1000).toFixed(0) + 'k</b><span>parameters, stored as 8-bit integers</span></div>' +
+    '<div><b>' + worst[1] + '</b><span>hardest digit, ' + (worst[0] * 100).toFixed(1) + '% correct</span></div>';
+})();
+</script>
+</body>
+</html>
